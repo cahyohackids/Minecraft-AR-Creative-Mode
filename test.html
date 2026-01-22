@@ -1,0 +1,1334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Minecraft AR: Creative Mode</title>
+    <!-- 
+    RUN INSTRUCTIONS:
+    1. Save this file as minecraft-ar.html
+    2. Start local server:
+       - npx serve
+       - OR python -m http.server 8000
+       - OR python3 -m http.server 8000
+    3. Open http://localhost:8000/minecraft-ar.html in Chrome/Edge
+    4. Allow camera access when prompted
+    -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+
+        * { box-sizing: border-box; }
+        body { 
+            margin: 0; background: #111; overflow: hidden; 
+            font-family: 'VT323', monospace; user-select: none; 
+        }
+        
+        #container { position: relative; width: 100vw; height: 100vh; }
+
+        /* VIDEO LAYER */
+        #webcam {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            object-fit: cover; transform: scaleX(-1); 
+            filter: contrast(1.1) brightness(1.1);
+        }
+
+        /* 3D LAYER */
+        #canvas-3d {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            transform: scaleX(-1); pointer-events: none; z-index: 10;
+        }
+
+        /* VIGNETTE */
+        #vignette {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,0.5) 100%);
+            pointer-events: none; z-index: 9;
+        }
+
+        /* UI OVERLAY */
+        #ui-overlay {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            z-index: 20; pointer-events: none;
+        }
+
+        /* TOP HUD */
+        #top-hud {
+            position: absolute; top: 10px; left: 10px; right: 10px;
+            display: flex; justify-content: space-between; align-items: flex-start;
+            pointer-events: all;
+        }
+
+        #info-panel {
+            color: white; font-size: 18px; text-shadow: 2px 2px 0 #000;
+            background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 4px;
+        }
+
+        #info-panel div { margin: 2px 0; }
+
+        #controls-panel {
+            text-align: right; color: white; font-size: 16px; 
+            text-shadow: 2px 2px 0 #000; background: rgba(0,0,0,0.5); 
+            padding: 8px 12px; border-radius: 4px;
+        }
+
+        .control-btn {
+            background: #555; border: 2px solid #000; 
+            border-top-color: #888; border-left-color: #888;
+            padding: 6px 16px; font-family: 'VT323', monospace; 
+            font-size: 18px; color: white; cursor: pointer; 
+            text-shadow: 1px 1px 0 #000; margin: 2px;
+            display: inline-block;
+        }
+        .control-btn:hover { background: #666; }
+        .control-btn:active { transform: scale(0.95); }
+
+        /* CROSSHAIR */
+        #crosshair {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 20px; height: 20px; z-index: 15; pointer-events: none;
+            opacity: 0.9;
+        }
+        #crosshair::before, #crosshair::after {
+            content: ''; position: absolute; background: rgba(255,255,255,0.9);
+        }
+        #crosshair::before { top: 9px; left: 0; width: 20px; height: 2px; }
+        #crosshair::after { top: 0; left: 9px; width: 2px; height: 20px; }
+
+        /* BOTTOM HOTBAR */
+        #hotbar {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            display: flex; gap: 5px; background: rgba(0,0,0,0.7); 
+            padding: 5px; border-radius: 4px; pointer-events: all;
+        }
+
+        .slot {
+            width: 50px; height: 50px; border: 3px solid #555; 
+            background: #222; image-rendering: pixelated; 
+            display: flex; justify-content: center; align-items: center;
+            cursor: pointer; transition: 0.1s; position: relative;
+        }
+
+        .slot img { width: 100%; height: 100%; object-fit: cover; }
+        .slot.active { 
+            border-color: #fff; box-shadow: 0 0 10px white; 
+            transform: scale(1.15); z-index: 10; 
+        }
+        .slot span { 
+            position: absolute; top: 2px; left: 4px; 
+            color: white; font-size: 14px; text-shadow: 1px 1px 0 #000; 
+        }
+        .slot .count {
+            position: absolute; bottom: 2px; right: 4px;
+            color: white; font-size: 16px; text-shadow: 1px 1px 0 #000;
+        }
+
+        /* LOADER */
+        #loader {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(135deg, #2b2b2b 0%, #1a1a1a 100%);
+            color: #fff; z-index: 9999;
+            display: flex; flex-direction: column; align-items: center; 
+            justify-content: center;
+        }
+
+        #loader h1 {
+            font-size: 60px; text-shadow: 4px 4px 0 #000; 
+            margin-bottom: 20px; animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+        }
+
+        #loader-text {
+            font-size: 24px; margin: 10px 0; color: #aaa;
+        }
+
+        .mc-btn {
+            background: #727272; border: 2px solid #000; 
+            border-top-color: #aaa; border-left-color: #aaa;
+            padding: 12px 40px; font-family: 'VT323', monospace; 
+            font-size: 28px; color: white; cursor: pointer; 
+            text-shadow: 2px 2px 0 #000; margin-top: 20px;
+        }
+        .mc-btn:hover { background: #888; }
+        .mc-btn:active { transform: translateY(2px); }
+
+        /* PAUSE MENU */
+        #pause-menu {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 1000; display: none;
+            justify-content: center; align-items: center; flex-direction: column;
+        }
+
+        #pause-menu h2 {
+            font-size: 48px; color: white; text-shadow: 3px 3px 0 #000;
+            margin-bottom: 30px;
+        }
+
+        #pause-menu button {
+            background: #727272; border: 2px solid #000;
+            border-top-color: #aaa; border-left-color: #aaa;
+            padding: 10px 50px; font-family: 'VT323', monospace;
+            font-size: 24px; color: white; cursor: pointer;
+            text-shadow: 2px 2px 0 #000; margin: 8px;
+            min-width: 250px;
+        }
+        #pause-menu button:hover { background: #888; }
+
+        /* MINING PROGRESS */
+        #mining-progress {
+            position: absolute; top: 50%; left: 50%; 
+            transform: translate(-50%, -50%);
+            width: 100px; height: 100px; z-index: 25;
+            pointer-events: none; display: none;
+        }
+
+        #mining-progress svg {
+            transform: rotate(-90deg);
+        }
+
+        #mining-progress circle {
+            fill: none;
+            stroke: #ff0000;
+            stroke-width: 8;
+            stroke-dasharray: 283;
+            stroke-dashoffset: 283;
+            transition: stroke-dashoffset 0.1s linear;
+        }
+
+        /* GESTURE ZONES (DEBUG) */
+        .zone {
+            position: absolute; top: 0; height: 100%; width: 50%; 
+            z-index: 5; pointer-events: none; opacity: 0;
+            transition: opacity 0.3s;
+        }
+        #zone-left { left: 0; background: rgba(0, 255, 0, 0.1); }
+        #zone-right { right: 0; background: rgba(255, 0, 0, 0.1); }
+
+        /* NOTIFICATION */
+        #notification {
+            position: absolute; top: 100px; left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.8); color: white;
+            padding: 15px 30px; border-radius: 8px;
+            font-size: 24px; text-shadow: 2px 2px 0 #000;
+            z-index: 30; display: none;
+        }
+    </style>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+            "@mediapipe/tasks-vision": "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/+esm"
+        }
+    }
+    </script>
+</head>
+<body>
+
+    <!-- LOADER -->
+    <div id="loader">
+        <h1>MINECRAFT AR</h1>
+        <p id="loader-text">Initializing...</p>
+        <button id="start-btn" class="mc-btn" style="display:none">START GAME</button>
+    </div>
+
+    <!-- PAUSE MENU -->
+    <div id="pause-menu">
+        <h2>GAME PAUSED</h2>
+        <button id="resume-btn">Resume</button>
+        <button id="save-btn">Save World</button>
+        <button id="reset-btn">Reset World</button>
+    </div>
+
+    <!-- NOTIFICATION -->
+    <div id="notification"></div>
+
+    <!-- MAIN CONTAINER -->
+    <div id="container">
+        <div id="zone-left"></div>
+        <div id="zone-right"></div>
+        <video id="webcam" autoplay playsinline muted></video>
+        <div id="vignette"></div>
+        <canvas id="canvas-3d"></canvas>
+        
+        <div id="ui-overlay">
+            <div id="top-hud">
+                <div id="info-panel">
+                    <div>FPS: <span id="fps">0</span></div>
+                    <div>Blocks: <span id="block-count">0</span> / <span id="block-limit">2000</span></div>
+                    <div>Mode: <span id="game-mode">PLAYING</span></div>
+                    <div style="font-size: 14px; color: #aaa; margin-top: 5px;">
+                        Left: BUILD | Right: BREAK
+                    </div>
+                </div>
+                
+                <div id="controls-panel">
+                    <div>
+                        <span class="control-btn" id="pause-btn">Pause (P)</span>
+                    </div>
+                    <div style="margin-top: 5px; font-size: 14px;">
+                        Keys: 1-7 Select | P Pause
+                    </div>
+                </div>
+            </div>
+
+            <div id="crosshair"></div>
+
+            <div id="mining-progress">
+                <svg width="100" height="100">
+                    <circle cx="50" cy="50" r="45" id="progress-circle"/>
+                </svg>
+            </div>
+
+            <div id="hotbar"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { FilesetResolver, HandLandmarker } from '@mediapipe/tasks-vision';
+
+        // ============================================
+        // CONFIGURATION
+        // ============================================
+        const CONFIG = {
+            BLOCK_SIZE: 2.5,
+            BUILD_DISTANCE: 15,
+            MAX_BLOCKS: 2000,
+            PINCH_THRESHOLD_IN: 0.045,
+            PINCH_THRESHOLD_OUT: 0.065,
+            BUILD_COOLDOWN: 250,
+            BREAK_HOLD_TIME: 600,
+            BREAK_COOLDOWN: 200,
+            CURSOR_SMOOTH_FACTOR: 0.3,
+            WORLD_SIZE: 16,
+            SAVE_INTERVAL: 5000,
+            FPS_TARGET: 60
+        };
+
+        // ============================================
+        // GAME STATE MACHINE
+        // ============================================
+        const GameState = {
+            LOADING: 'LOADING',
+            MENU: 'MENU',
+            PLAYING: 'PLAYING',
+            PAUSED: 'PAUSED'
+        };
+
+        const HandState = {
+            IDLE: 'IDLE',
+            PINCHING: 'PINCHING',
+            HOLDING: 'HOLDING'
+        };
+
+        class GameStateManager {
+            constructor() {
+                this.state = GameState.LOADING;
+                this.prevState = null;
+            }
+
+            setState(newState) {
+                this.prevState = this.state;
+                this.state = newState;
+                document.getElementById('game-mode').textContent = newState;
+            }
+
+            isPlaying() {
+                return this.state === GameState.PLAYING;
+            }
+
+            isPaused() {
+                return this.state === GameState.PAUSED;
+            }
+        }
+
+        const gameState = new GameStateManager();
+
+        // ============================================
+        // TEXTURE GENERATOR
+        // ============================================
+        class TextureGenerator {
+            static create(type) {
+                const size = 64;
+                const canvas = document.createElement('canvas');
+                canvas.width = size;
+                canvas.height = size;
+                const ctx = canvas.getContext('2d');
+
+                const noise = (amount) => {
+                    for(let i = 0; i < 400; i++) {
+                        ctx.fillStyle = `rgba(0,0,0,${Math.random() * amount})`;
+                        ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
+                    }
+                };
+
+                switch(type) {
+                    case 'grass_side':
+                        ctx.fillStyle = '#795548';
+                        ctx.fillRect(0, 0, size, size);
+                        noise(0.2);
+                        ctx.fillStyle = '#4CAF50';
+                        ctx.fillRect(0, 0, size, 20);
+                        for(let i = 0; i < 10; i++) {
+                            ctx.fillRect(i * 6, 20, 4, Math.random() * 10);
+                        }
+                        break;
+                    case 'grass_top':
+                        ctx.fillStyle = '#4CAF50';
+                        ctx.fillRect(0, 0, size, size);
+                        for(let i = 0; i < 100; i++) {
+                            ctx.fillStyle = `rgba(255,255,255,${Math.random() * 0.2})`;
+                            ctx.fillRect(Math.random() * size, Math.random() * size, 2, 2);
+                        }
+                        break;
+                    case 'dirt':
+                        ctx.fillStyle = '#795548';
+                        ctx.fillRect(0, 0, size, size);
+                        noise(0.3);
+                        break;
+                    case 'stone':
+                        ctx.fillStyle = '#9E9E9E';
+                        ctx.fillRect(0, 0, size, size);
+                        noise(0.4);
+                        break;
+                    case 'wood':
+                        ctx.fillStyle = '#5D4037';
+                        ctx.fillRect(0, 0, size, size);
+                        ctx.fillStyle = '#4E342E';
+                        for(let i = 10; i < size; i += 10) {
+                            ctx.fillRect(i, 0, 2, size);
+                        }
+                        break;
+                    case 'planks':
+                        ctx.fillStyle = '#E0C097';
+                        ctx.fillRect(0, 0, size, size);
+                        ctx.fillStyle = '#8D6E63';
+                        ctx.fillRect(0, 0, size, 2);
+                        ctx.fillRect(0, 32, size, 2);
+                        break;
+                    case 'bricks':
+                        ctx.fillStyle = '#B71C1C';
+                        ctx.fillRect(0, 0, size, size);
+                        ctx.fillStyle = '#ccc';
+                        for(let y = 0; y < size; y += 16) {
+                            ctx.fillRect(0, y, size, 2);
+                            for(let x = 0; x < size; x += 32) {
+                                ctx.fillRect(x + (y % 32 === 0 ? 0 : 16), y, 2, 16);
+                            }
+                        }
+                        break;
+                    case 'glass':
+                        ctx.fillStyle = '#E3F2FD';
+                        ctx.fillRect(0, 0, size, size);
+                        ctx.lineWidth = 2;
+                        ctx.strokeStyle = '#fff';
+                        ctx.strokeRect(2, 2, size - 4, size - 4);
+                        break;
+                }
+
+                const tex = new THREE.CanvasTexture(canvas);
+                tex.magFilter = THREE.NearestFilter;
+                tex.minFilter = THREE.NearestFilter;
+                return { tex, url: canvas.toDataURL() };
+            }
+        }
+
+        // ============================================
+        // ASSETS
+        // ============================================
+        const TEXTURES = {
+            grass: [
+                TextureGenerator.create('grass_side'),
+                TextureGenerator.create('grass_top'),
+                TextureGenerator.create('dirt')
+            ],
+            dirt: [
+                TextureGenerator.create('dirt'),
+                TextureGenerator.create('dirt'),
+                TextureGenerator.create('dirt')
+            ],
+            stone: [
+                TextureGenerator.create('stone'),
+                TextureGenerator.create('stone'),
+                TextureGenerator.create('stone')
+            ],
+            wood: [
+                TextureGenerator.create('wood'),
+                TextureGenerator.create('wood'),
+                TextureGenerator.create('wood')
+            ],
+            planks: [
+                TextureGenerator.create('planks'),
+                TextureGenerator.create('planks'),
+                TextureGenerator.create('planks')
+            ],
+            bricks: [
+                TextureGenerator.create('bricks'),
+                TextureGenerator.create('bricks'),
+                TextureGenerator.create('bricks')
+            ],
+            glass: [
+                TextureGenerator.create('glass'),
+                TextureGenerator.create('glass'),
+                TextureGenerator.create('glass')
+            ]
+        };
+
+        const INVENTORY = ['grass', 'dirt', 'stone', 'wood', 'planks', 'bricks', 'glass'];
+        let selectedBlockIndex = 0;
+        let inventoryCounts = {};
+        INVENTORY.forEach(type => inventoryCounts[type] = 64);
+
+        // ============================================
+        // UI INITIALIZATION
+        // ============================================
+        function initUI() {
+            const hotbar = document.getElementById('hotbar');
+            INVENTORY.forEach((type, index) => {
+                const slot = document.createElement('div');
+                slot.className = index === 0 ? 'slot active' : 'slot';
+                slot.innerHTML = `
+                    <img src="${TEXTURES[type][0].url}">
+                    <span>${index + 1}</span>
+                    <span class="count">${inventoryCounts[type]}</span>
+                `;
+                slot.dataset.index = index;
+                hotbar.appendChild(slot);
+            });
+        }
+
+        function updateSlotUI() {
+            document.querySelectorAll('.slot').forEach((el, i) => {
+                el.className = i === selectedBlockIndex ? 'slot active' : 'slot';
+            });
+        }
+
+        function updateInventoryCount(type, delta) {
+            inventoryCounts[type] = Math.max(0, Math.min(999, inventoryCounts[type] + delta));
+            const slots = document.querySelectorAll('.slot');
+            const index = INVENTORY.indexOf(type);
+            if (index >= 0 && slots[index]) {
+                const countEl = slots[index].querySelector('.count');
+                if (countEl) countEl.textContent = inventoryCounts[type];
+            }
+        }
+
+        function showNotification(message, duration = 2000) {
+            const notif = document.getElementById('notification');
+            notif.textContent = message;
+            notif.style.display = 'block';
+            setTimeout(() => {
+                notif.style.display = 'none';
+            }, duration);
+        }
+
+        // ============================================
+        // THREE.JS SETUP
+        // ============================================
+        const canvas3D = document.getElementById('canvas-3d');
+        const renderer = new THREE.WebGLRenderer({ 
+            canvas: canvas3D, 
+            alpha: true, 
+            antialias: false,
+            powerPreference: 'high-performance'
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(
+            60, 
+            window.innerWidth / window.innerHeight, 
+            0.1, 
+            1000
+        );
+        camera.position.z = 20;
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.8);
+        scene.add(ambientLight);
+
+        const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
+        sunLight.position.set(10, 20, 10);
+        scene.add(sunLight);
+
+        // ============================================
+        // WORLD MANAGEMENT
+        // ============================================
+        class WorldManager {
+            constructor() {
+                this.blockMap = new Map();
+                this.blocks = [];
+                this.instancedMeshes = new Map();
+                this.initInstancedMeshes();
+                this.generateFloor();
+            }
+
+            initInstancedMeshes() {
+                const geometry = new THREE.BoxGeometry(
+                    CONFIG.BLOCK_SIZE, 
+                    CONFIG.BLOCK_SIZE, 
+                    CONFIG.BLOCK_SIZE
+                );
+
+                INVENTORY.forEach(type => {
+                    const materials = this.createMaterials(type);
+                    const mesh = new THREE.InstancedMesh(geometry, materials, CONFIG.MAX_BLOCKS);
+                    mesh.count = 0;
+                    mesh.userData.type = type;
+                    scene.add(mesh);
+                    this.instancedMeshes.set(type, mesh);
+                });
+            }
+
+            createMaterials(type) {
+                const tData = TEXTURES[type];
+                const materials = [
+                    new THREE.MeshLambertMaterial({ map: tData[0].tex }),
+                    new THREE.MeshLambertMaterial({ map: tData[0].tex }),
+                    new THREE.MeshLambertMaterial({ map: tData[1].tex }),
+                    new THREE.MeshLambertMaterial({ map: tData[2].tex }),
+                    new THREE.MeshLambertMaterial({ map: tData[0].tex }),
+                    new THREE.MeshLambertMaterial({ map: tData[0].tex })
+                ];
+
+                if (type === 'glass') {
+                    materials.forEach(m => {
+                        m.transparent = true;
+                        m.opacity = 0.6;
+                    });
+                }
+
+                return materials;
+            }
+
+            generateFloor() {
+                const halfSize = CONFIG.WORLD_SIZE / 2;
+                for (let x = -halfSize; x < halfSize; x++) {
+                    for (let z = -halfSize; z < halfSize; z++) {
+                        this.addBlock(
+                            x * CONFIG.BLOCK_SIZE, 
+                            -CONFIG.BLOCK_SIZE, 
+                            z * CONFIG.BLOCK_SIZE, 
+                            'grass',
+                            false
+                        );
+                    }
+                }
+                this.updateBlockCount();
+            }
+
+            snap(vec) {
+                return new THREE.Vector3(
+                    Math.round(vec.x / CONFIG.BLOCK_SIZE) * CONFIG.BLOCK_SIZE,
+                    Math.round(vec.y / CONFIG.BLOCK_SIZE) * CONFIG.BLOCK_SIZE,
+                    Math.round(vec.z / CONFIG.BLOCK_SIZE) * CONFIG.BLOCK_SIZE
+                );
+            }
+
+            getKey(x, y, z) {
+                return `${Math.round(x)},${Math.round(y)},${Math.round(z)}`;
+            }
+
+            hasBlock(pos) {
+                const snapped = this.snap(pos);
+                return this.blockMap.has(this.getKey(snapped.x, snapped.y, snapped.z));
+            }
+
+            addBlock(x, y, z, type, playSound = true) {
+                const pos = this.snap(new THREE.Vector3(x, y, z));
+                const key = this.getKey(pos.x, pos.y, pos.z);
+
+                if (this.blockMap.has(key)) return false;
+                if (this.blocks.length >= CONFIG.MAX_BLOCKS) {
+                    showNotification('Block limit reached!');
+                    return false;
+                }
+
+                const blockData = {
+                    position: pos,
+                    type: type,
+                    createdAt: Date.now(),
+                    health: 100
+                };
+
+                this.blockMap.set(key, blockData);
+                this.blocks.push(blockData);
+
+                this.updateInstancedMesh(type);
+                this.updateBlockCount();
+
+                if (playSound) {
+                    AudioManager.play('place');
+                }
+
+                return true;
+            }
+
+            removeBlock(pos) {
+                const snapped = this.snap(pos);
+                const key = this.getKey(snapped.x, snapped.y, snapped.z);
+
+                if (!this.blockMap.has(key)) return null;
+
+                const blockData = this.blockMap.get(key);
+                this.blockMap.delete(key);
+
+                const index = this.blocks.indexOf(blockData);
+                if (index > -1) {
+                    this.blocks.splice(index, 1);
+                }
+
+                this.updateInstancedMesh(blockData.type);
+                this.updateBlockCount();
+
+                AudioManager.play('break');
+                ParticleManager.spawnBreakParticles(blockData.position);
+
+                return blockData;
+            }
+
+            updateInstancedMesh(type) {
+                const mesh = this.instancedMeshes.get(type);
+                if (!mesh) return;
+
+                const blocksOfType = this.blocks.filter(b => b.type === type);
+                mesh.count = blocksOfType.length;
+
+                const matrix = new THREE.Matrix4();
+                blocksOfType.forEach((block, i) => {
+                    matrix.setPosition(block.position);
+                    mesh.setMatrixAt(i, matrix);
+                });
+
+                mesh.instanceMatrix.needsUpdate = true;
+            }
+
+            updateBlockCount() {
+                document.getElementById('block-count').textContent = this.blocks.length;
+            }
+
+            saveWorld() {
+                const data = this.blocks.map(b => ({
+                    x: b.position.x,
+                    y: b.position.y,
+                    z: b.position.z,
+                    t: INVENTORY.indexOf(b.type)
+                }));
+
+                try {
+                    localStorage.setItem('minecraft-ar-world', JSON.stringify(data));
+                    localStorage.setItem('minecraft-ar-inventory', JSON.stringify(inventoryCounts));
+                    showNotification('World saved!', 1500);
+                    return true;
+                } catch (e) {
+                    showNotification('Save failed!', 1500);
+                    return false;
+                }
+            }
+
+            loadWorld() {
+                try {
+                    const data = localStorage.getItem('minecraft-ar-world');
+                    const invData = localStorage.getItem('minecraft-ar-inventory');
+
+                    if (data) {
+                        const blocks = JSON.parse(data);
+                        this.clearWorld(false);
+
+                        blocks.forEach(b => {
+                            const type = INVENTORY[b.t] || 'grass';
+                            this.addBlock(b.x, b.y, b.z, type, false);
+                        });
+
+                        showNotification('World loaded!', 1500);
+                    }
+
+                    if (invData) {
+                        const counts = JSON.parse(invData);
+                        Object.assign(inventoryCounts, counts);
+                        INVENTORY.forEach(type => {
+                            updateInventoryCount(type, 0);
+                        });
+                    }
+
+                    return true;
+                } catch (e) {
+                    console.error('Load failed:', e);
+                    return false;
+                }
+            }
+
+            clearWorld(keepFloor = true) {
+                const floorY = -CONFIG.BLOCK_SIZE;
+
+                if (keepFloor) {
+                    this.blocks = this.blocks.filter(b => b.position.y === floorY);
+                    const keysToKeep = new Set();
+                    this.blocks.forEach(b => {
+                        keysToKeep.add(this.getKey(b.position.x, b.position.y, b.position.z));
+                    });
+                    
+                    const allKeys = Array.from(this.blockMap.keys());
+                    allKeys.forEach(key => {
+                        if (!keysToKeep.has(key)) {
+                            this.blockMap.delete(key);
+                        }
+                    });
+                } else {
+                    this.blocks = [];
+                    this.blockMap.clear();
+                }
+
+                INVENTORY.forEach(type => {
+                    this.updateInstancedMesh(type);
+                });
+
+                this.updateBlockCount();
+            }
+
+            reset() {
+                this.clearWorld(false);
+                this.generateFloor();
+                INVENTORY.forEach(type => {
+                    inventoryCounts[type] = 64;
+                    updateInventoryCount(type, 0);
+                });
+                showNotification('World reset!', 1500);
+            }
+        }
+
+        // ============================================
+        // AUDIO MANAGER
+        // ============================================
+        class AudioManager {
+            static ctx = null;
+
+            static init() {
+                this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+
+            static play(type) {
+                if (!this.ctx) return;
+                if (this.ctx.state === 'suspended') this.ctx.resume();
+
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                const now = this.ctx.currentTime;
+
+                switch(type) {
+                    case 'place':
+                        osc.type = 'sine';
+                        osc.frequency.setValueAtTime(400, now);
+                        osc.frequency.exponentialRampToValueAtTime(800, now + 0.1);
+                        gain.gain.setValueAtTime(0.2, now);
+                        gain.gain.linearRampToValueAtTime(0, now + 0.1);
+                        osc.start();
+                        osc.stop(now + 0.1);
+                        break;
+                    case 'break':
+                        osc.type = 'sawtooth';
+                        osc.frequency.setValueAtTime(100, now);
+                        osc.frequency.linearRampToValueAtTime(50, now + 0.15);
+                        gain.gain.setValueAtTime(0.2, now);
+                        gain.gain.linearRampToValueAtTime(0, now + 0.15);
+                        osc.start();
+                        osc.stop(now + 0.15);
+                        break;
+                    case 'select':
+                        osc.type = 'triangle';
+                        osc.frequency.setValueAtTime(600, now);
+                        gain.gain.setValueAtTime(0.08, now);
+                        gain.gain.linearRampToValueAtTime(0, now + 0.05);
+                        osc.start();
+                        osc.stop(now + 0.05);
+                        break;
+                }
+            }
+        }
+
+        // ============================================
+        // PARTICLE MANAGER
+        // ============================================
+        class ParticleManager {
+            static spawnBreakParticles(pos) {
+                const particleCount = 6;
+                const geometry = new THREE.BoxGeometry(0.4, 0.4, 0.4);
+                const material = new THREE.MeshBasicMaterial({ color: 0x555555 });
+
+                for (let i = 0; i < particleCount; i++) {
+                    const particle = new THREE.Mesh(geometry, material);
+                    particle.position.copy(pos);
+                    particle.position.x += (Math.random() - 0.5) * 2;
+                    particle.position.y += (Math.random() - 0.5) * 2;
+                    particle.position.z += (Math.random() - 0.5) * 0.5;
+
+                    const velocity = {
+                        x: (Math.random() - 0.5) * 0.2,
+                        y: Math.random() * 0.3 + 0.1,
+                        z: (Math.random() - 0.5) * 0.2
+                    };
+
+                    scene.add(particle);
+
+                    let life = 15;
+                    const animateParticle = () => {
+                        particle.position.x += velocity.x;
+                        particle.position.y += velocity.y;
+                        particle.position.z += velocity.z;
+                        
+                        velocity.y -= 0.02;
+                        particle.rotation.x += 0.1;
+                        particle.rotation.y += 0.1;
+
+                        life--;
+                        if (life > 0) {
+                            requestAnimationFrame(animateParticle);
+                        } else {
+                            scene.remove(particle);
+                            geometry.dispose();
+                            material.dispose();
+                        }
+                    };
+                    animateParticle();
+                }
+            }
+        }
+
+        // ============================================
+        // HAND TRACKING
+        // ============================================
+        class HandTracker {
+            constructor() {
+                this.leftHand = this.createHandState();
+                this.rightHand = this.createHandState();
+                this.landmarker = null;
+            }
+
+            createHandState() {
+                return {
+                    visible: false,
+                    pinching: false,
+                    pinchStartTime: 0,
+                    lastActionTime: 0,
+                    smoothPos: new THREE.Vector3(),
+                    rawPos: new THREE.Vector3(),
+                    confidence: 0,
+                    state: HandState.IDLE
+                };
+            }
+
+            async init() {
+                const vision = await FilesetResolver.forVisionTasks(
+                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.3/wasm"
+                );
+
+                this.landmarker = await HandLandmarker.createFromOptions(vision, {
+                    baseOptions: {
+                        modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task',
+                        delegate: 'GPU'
+                    },
+                    runningMode: 'VIDEO',
+                    numHands: 2,
+                    minHandDetectionConfidence: 0.5,
+                    minHandPresenceConfidence: 0.5,
+                    minTrackingConfidence: 0.5
+                });
+            }
+
+            update(video, timestamp) {
+                if (!this.landmarker || !video) return;
+
+                this.leftHand.visible = false;
+                this.rightHand.visible = false;
+
+                const results = this.landmarker.detectForVideo(video, timestamp);
+
+                if (results.landmarks && results.handednesses) {
+                    for (let i = 0; i < results.landmarks.length; i++) {
+                        const landmarks = results.landmarks[i];
+                        const handedness = results.handednesses[i][0];
+                        
+                        const hand = handedness.categoryName === 'Left' ? 
+                            this.rightHand : this.leftHand;
+
+                        this.updateHandState(hand, landmarks);
+                    }
+                }
+            }
+
+            updateHandState(hand, landmarks) {
+                const indexTip = landmarks[8];
+                const thumbTip = landmarks[4];
+                const wrist = landmarks[0];
+
+                hand.visible = true;
+                hand.confidence = 1.0;
+
+                hand.rawPos.set(indexTip.x, indexTip.y, indexTip.z);
+                
+                hand.smoothPos.lerp(hand.rawPos, CONFIG.CURSOR_SMOOTH_FACTOR);
+
+                const pinchDist = Math.hypot(
+                    indexTip.x - thumbTip.x,
+                    indexTip.y - thumbTip.y
+                );
+
+                const wasPinching = hand.pinching;
+
+                if (!hand.pinching && pinchDist < CONFIG.PINCH_THRESHOLD_IN) {
+                    hand.pinching = true;
+                    hand.pinchStartTime = Date.now();
+                    hand.state = HandState.PINCHING;
+                } else if (hand.pinching && pinchDist > CONFIG.PINCH_THRESHOLD_OUT) {
+                    hand.pinching = false;
+                    hand.state = HandState.IDLE;
+                }
+
+                if (hand.pinching && Date.now() - hand.pinchStartTime > CONFIG.BREAK_HOLD_TIME) {
+                    hand.state = HandState.HOLDING;
+                }
+            }
+
+            getWorldPos(handPos) {
+                const vec = new THREE.Vector3(
+                    (handPos.x * 2) - 1,
+                    -(handPos.y * 2) + 1,
+                    0.5
+                );
+                vec.unproject(camera);
+                vec.sub(camera.position).normalize();
+                const pos = new THREE.Vector3()
+                    .copy(camera.position)
+                    .add(vec.multiplyScalar(CONFIG.BUILD_DISTANCE));
+                pos.z = 0;
+                return pos;
+            }
+        }
+
+        // ============================================
+        // CURSOR MANAGER
+        // ============================================
+        class CursorManager {
+            constructor() {
+                const geometry = new THREE.BoxGeometry(
+                    CONFIG.BLOCK_SIZE,
+                    CONFIG.BLOCK_SIZE,
+                    CONFIG.BLOCK_SIZE
+                );
+
+                this.buildCursor = new THREE.Mesh(
+                    geometry,
+                    new THREE.MeshBasicMaterial({
+                        color: 0x00ff00,
+                        wireframe: true,
+                        opacity: 0.6,
+                        transparent: true
+                    })
+                );
+
+                this.breakCursor = new THREE.Mesh(
+                    geometry,
+                    new THREE.MeshBasicMaterial({
+                        color: 0xff0000,
+                        wireframe: true,
+                        opacity: 0.8,
+                        transparent: true
+                    })
+                );
+
+                scene.add(this.buildCursor);
+                scene.add(this.breakCursor);
+
+                this.buildCursor.visible = false;
+                this.breakCursor.visible = false;
+            }
+
+            update(worldPos, type, isValid = true) {
+                const cursor = type === 'build' ? this.buildCursor : this.breakCursor;
+                cursor.visible = true;
+                cursor.position.copy(worldPos);
+                
+                if (type === 'build') {
+                    cursor.material.color.setHex(isValid ? 0x00ff00 : 0xff6600);
+                } else {
+                    cursor.material.color.setHex(isValid ? 0xff0000 : 0xff6600);
+                }
+            }
+
+            hide(type) {
+                if (type === 'build') {
+                    this.buildCursor.visible = false;
+                } else {
+                    this.breakCursor.visible = false;
+                }
+            }
+        }
+
+        // ============================================
+        // GAME CONTROLLER
+        // ============================================
+        class GameController {
+            constructor() {
+                this.world = new WorldManager();
+                this.handTracker = new HandTracker();
+                this.cursorManager = new CursorManager();
+                this.miningProgress = 0;
+                this.miningTarget = null;
+                this.lastSaveTime = Date.now();
+                this.fpsHistory = [];
+                this.lastFrameTime = performance.now();
+            }
+
+            async init() {
+                await this.handTracker.init();
+                this.world.loadWorld();
+            }
+
+            update(video, timestamp) {
+                if (!gameState.isPlaying()) return;
+
+                this.handTracker.update(video, timestamp);
+
+                this.updateBuildHand();
+                this.updateBreakHand();
+
+                if (Date.now() - this.lastSaveTime > CONFIG.SAVE_INTERVAL) {
+                    this.world.saveWorld();
+                    this.lastSaveTime = Date.now();
+                }
+            }
+
+            updateBuildHand() {
+                const hand = this.handTracker.leftHand;
+
+                if (!hand.visible) {
+                    this.cursorManager.hide('build');
+                    return;
+                }
+
+                const worldPos = this.handTracker.getWorldPos(hand.smoothPos);
+                const snapped = this.world.snap(worldPos);
+
+                const hasBlock = this.world.hasBlock(snapped);
+                const canPlace = !hasBlock && 
+                    inventoryCounts[INVENTORY[selectedBlockIndex]] > 0;
+
+                this.cursorManager.update(snapped, 'build', canPlace);
+
+                if (hand.state === HandState.PINCHING && canPlace) {
+                    const now = Date.now();
+                    if (now - hand.lastActionTime > CONFIG.BUILD_COOLDOWN) {
+                        const type = INVENTORY[selectedBlockIndex];
+                        if (this.world.addBlock(snapped.x, snapped.y, snapped.z, type)) {
+                            updateInventoryCount(type, -1);
+                            hand.lastActionTime = now;
+                        }
+                    }
+                }
+            }
+
+            updateBreakHand() {
+                const hand = this.handTracker.rightHand;
+
+                if (!hand.visible) {
+                    this.cursorManager.hide('break');
+                    this.hideMiningProgress();
+                    this.miningTarget = null;
+                    return;
+                }
+
+                const worldPos = this.handTracker.getWorldPos(hand.smoothPos);
+                const snapped = this.world.snap(worldPos);
+
+                const hasBlock = this.world.hasBlock(snapped);
+
+                this.cursorManager.update(snapped, 'break', hasBlock);
+
+                if (hand.state === HandState.HOLDING && hasBlock) {
+                    const holdTime = Date.now() - hand.pinchStartTime;
+                    const progress = Math.min(holdTime / CONFIG.BREAK_HOLD_TIME, 1);
+
+                    this.showMiningProgress(progress);
+
+                    if (progress >= 1 && Date.now() - hand.lastActionTime > CONFIG.BREAK_COOLDOWN) {
+                        const removed = this.world.removeBlock(snapped);
+                        if (removed) {
+                            updateInventoryCount(removed.type, 1);
+                            hand.lastActionTime = Date.now();
+                            hand.pinchStartTime = Date.now();
+                            this.hideMiningProgress();
+                        }
+                    }
+                } else {
+                    this.hideMiningProgress();
+                }
+            }
+
+            showMiningProgress(progress) {
+                const el = document.getElementById('mining-progress');
+                const circle = document.getElementById('progress-circle');
+                el.style.display = 'block';
+                
+                const offset = 283 - (progress * 283);
+                circle.style.strokeDashoffset = offset;
+            }
+
+            hideMiningProgress() {
+                document.getElementById('mining-progress').style.display = 'none';
+            }
+
+            updateFPS() {
+                const now = performance.now();
+                const delta = now - this.lastFrameTime;
+                this.lastFrameTime = now;
+
+                const fps = 1000 / delta;
+                this.fpsHistory.push(fps);
+                if (this.fpsHistory.length > 30) {
+                    this.fpsHistory.shift();
+                }
+
+                const avgFps = this.fpsHistory.reduce((a, b) => a + b, 0) / this.fpsHistory.length;
+                document.getElementById('fps').textContent = Math.round(avgFps);
+            }
+        }
+
+        // ============================================
+        // MAIN INITIALIZATION
+        // ============================================
+        let gameController;
+        let video;
+        let lastVideoTime = -1;
+
+        async function initialize() {
+            const loaderText = document.getElementById('loader-text');
+            
+            loaderText.textContent = 'Loading textures...';
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            loaderText.textContent = 'Initializing AI models...';
+            gameController = new GameController();
+            await gameController.init();
+
+            loaderText.textContent = 'Ready!';
+            await new Promise(resolve => setTimeout(resolve, 500));
+
+            const startBtn = document.getElementById('start-btn');
+            startBtn.style.display = 'block';
+            startBtn.onclick = startGame;
+        }
+
+        function startGame() {
+            document.getElementById('loader').style.display = 'none';
+            gameState.setState(GameState.PLAYING);
+            
+            video = document.getElementById('webcam');
+            navigator.mediaDevices.getUserMedia({ 
+                video: { 
+                    width: 1280, 
+                    height: 720,
+                    facingMode: 'user'
+                } 
+            }).then(stream => {
+                video.srcObject = stream;
+                video.addEventListener('loadeddata', () => {
+                    gameLoop();
+                });
+            }).catch(err => {
+                showNotification('Camera access denied!', 3000);
+                console.error('Camera error:', err);
+            });
+        }
+
+        function gameLoop() {
+            if (video && video.currentTime !== lastVideoTime) {
+                lastVideoTime = video.currentTime;
+                gameController.update(video, performance.now());
+            }
+
+            renderer.render(scene, camera);
+            gameController.updateFPS();
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // ============================================
+        // UI EVENT HANDLERS
+        // ============================================
+        document.getElementById('pause-btn').addEventListener('click', togglePause);
+
+        document.getElementById('resume-btn').addEventListener('click', () => {
+            togglePause();
+        });
+
+        document.getElementById('save-btn').addEventListener('click', () => {
+            gameController.world.saveWorld();
+        });
+
+        document.getElementById('reset-btn').addEventListener('click', () => {
+            const confirmed = window.confirm('Reset world? This cannot be undone!');
+            if (confirmed) {
+                gameController.world.reset();
+                document.getElementById('pause-menu').style.display = 'none';
+                gameState.setState(GameState.PLAYING);
+            }
+        });
+
+        function togglePause() {
+            if (gameState.isPlaying()) {
+                gameState.setState(GameState.PAUSED);
+                document.getElementById('pause-menu').style.display = 'flex';
+            } else if (gameState.isPaused()) {
+                gameState.setState(GameState.PLAYING);
+                document.getElementById('pause-menu').style.display = 'none';
+            }
+        }
+
+        document.getElementById('hotbar').addEventListener('click', (e) => {
+            const slot = e.target.closest('.slot');
+            if (slot) {
+                const index = parseInt(slot.dataset.index);
+                selectedBlockIndex = index;
+                updateSlotUI();
+                AudioManager.play('select');
+            }
+        });
+
+        window.addEventListener('keydown', (e) => {
+            const num = parseInt(e.key);
+            if (num > 0 && num <= INVENTORY.length) {
+                selectedBlockIndex = num - 1;
+                updateSlotUI();
+                AudioManager.play('select');
+            }
+
+            if (e.key === 'p' || e.key === 'P') {
+                togglePause();
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+        });
+
+        // ============================================
+        // START APPLICATION
+        // ============================================
+        initUI();
+        AudioManager.init();
+        initialize();
+
+    </script>
+</body>
+</html>
